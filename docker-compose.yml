@@ -3,5 +3,7 @@ services:
     build: .
     restart: always
     init: true
+    environment:
+      - TZ=Asia/Tokyo
     volumes:
       - ./.env:/app/.env
