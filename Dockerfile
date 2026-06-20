@@ -4,9 +4,6 @@ WORKDIR /app
 COPY . ./
 RUN apk update && \
   apk add --no-cache nodejs pnpm && \
-  chmod +x /usr/local/bin/yt-dlp && \
-  pnpm install --only=production
-
-EXPOSE 3000
+  pnpm install --only=production --force
 
 ENTRYPOINT [ "node", "src/main.ts" ]
