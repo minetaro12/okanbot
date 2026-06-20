@@ -1,0 +1,7 @@
+services:
+  bot:
+    build: .
+    restart: always
+    init: true
+    volumes:
+      - ./.env:/app/.env
