@@ -19,7 +19,7 @@
   "type": "module",
   "dependencies": {
     "@types/yargs-parser": "^21.0.3",
-    "discord.js": "^14.26.4",
+    "discord.js": "^14.27.0",
     "yargs-parser": "^22.0.0"
   },
   "devDependencies": {
