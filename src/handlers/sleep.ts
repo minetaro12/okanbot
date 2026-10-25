@@ -1,5 +1,5 @@
 import type { Message, OmitPartialGroupDMChannel } from "discord.js";
-import parse from "yargs-parser";
+import { client } from "../main.ts";
 import { createEmbed } from "../lib/createEmbed.ts";
 import { DEFAULT_MESSAGE_OPTIONS } from "../lib/messageOptions.ts";
 import { GuildStates, State } from "../state/state.ts";
@@ -22,7 +22,7 @@ export const sleepHandler = (message: OmitPartialGroupDMChannel<Message<boolean>
 
   if (!message.guildId) return;
 
-  const timeInput = parse(message.content)._[1]?.toString();
+  const [, timeInput, mention, ...extra] = message.content.trim().split(/\s+/);
 
   if (!timeInput) {
     message.reply({
@@ -53,6 +53,20 @@ export const sleepHandler = (message: OmitPartialGroupDMChannel<Message<boolean>
     return;
   }
 
+  const userId = mention?.match(/^<@!?(\d+)>$/)?.[1];
+  const user = userId ? message.mentions.users.get(userId) : undefined;
+  if (extra.length > 0 || (mention !== undefined && (!user || user.bot || !voiceChannel.members.has(user.id)))) {
+    message.reply({
+      embeds: [createEmbed({
+        title: "同じVCにいるユーザーを1人メンションしてください",
+        description: "例: `!sleep 23:30 @ユーザー名`（Botは対象外です）",
+        color: "error"
+      })],
+      ...DEFAULT_MESSAGE_OPTIONS
+    });
+    return;
+  }
+
   const [hours, minutes] = timeInput.split(":").map(Number);
 
   // 現在時刻と目標時刻の計算
@@ -69,19 +83,17 @@ export const sleepHandler = (message: OmitPartialGroupDMChannel<Message<boolean>
   const delay = target.getTime() - now.getTime();
 
   // Statesからギルドの状態を取得、なければ新規作成
-  const state = GuildStates.get(message.guildId);
-  if (state) {
-    state.setTimer(delay, timeInput);
-  } else {
-    const newState = new State(voiceChannel.id, message.channelId, message.guildId);
-    newState.setTimer(delay, timeInput);
-    GuildStates.set(message.guildId, newState);
-  }
+  const state = GuildStates.get(message.guildId) ?? new State(message.guildId, client);
+  state.setTimer(delay, timeInput, voiceChannel.id, message.channelId, userId);
+  GuildStates.set(message.guildId, state);
 
   message.reply({
     embeds: [
       createEmbed({
         title: `ボイスチャンネルからの切断を ${timeInput} に設定しました`,
+        description: userId
+          ? `<@${userId}> の個別設定です。全員用の設定より優先されます。`
+          : "このVCの全員用の設定です。個別設定のあるユーザーは対象外です。",
         color: "success"
       })
     ],

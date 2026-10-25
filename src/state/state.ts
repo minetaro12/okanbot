@@ -1,62 +1,81 @@
-import type { TextChannel } from "discord.js";
-import { client } from "../main.ts";
+import type { Client, TextChannel } from "discord.js";
 import { createEmbed } from "../lib/createEmbed.ts";
 import { DEFAULT_MESSAGE_OPTIONS } from "../lib/messageOptions.ts";
+
+type Schedule = {
+  timer: NodeJS.Timeout | null;
+  disconnectTime: string;
+  voiceChannelId: string;
+  notifyChannelId: string;
+};
 
 export const GuildStates = new Map<string, State>();
 
 export class State {
-  voiceChannelId: string;
-  notifyChannelId: string;
   guildId: string;
-  timer: NodeJS.Timeout | null;
-  disconnectTime: string | null;
+  client: Client;
+  globalSchedule: Schedule | null = null;
+  userSchedules = new Map<string, Schedule>();
 
-  constructor(voiceChannelId: string, notifyChannelId: string, guildId: string) {
-    this.voiceChannelId = voiceChannelId;
-    this.notifyChannelId = notifyChannelId;
+  constructor(guildId: string, client: Client) {
     this.guildId = guildId;
-    this.timer = null;
-    this.disconnectTime = null;
+    this.client = client;
   }
 
-  setTimer(delay: number, disconnectTime: string) {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-      this.disconnectTime = null;
-    }
+  setTimer(delay: number, disconnectTime: string, voiceChannelId: string, notifyChannelId: string, userId?: string) {
+    const previous = userId ? this.userSchedules.get(userId) : this.globalSchedule;
+    if (previous?.timer) clearTimeout(previous.timer);
 
-    this.timer = setTimeout(() => {
-      this.disconnectAll();
+    const schedule: Schedule = { timer: null, disconnectTime, voiceChannelId, notifyChannelId };
+    schedule.timer = setTimeout(() => {
+      void this.disconnect(schedule, userId).catch(console.error);
     }, delay);
-    this.disconnectTime = disconnectTime;
+
+    if (userId) {
+      this.userSchedules.set(userId, schedule);
+    } else {
+      this.globalSchedule = schedule;
+    }
   }
 
-  async disconnectAll() {
-    const notifyChannel = await client.channels.fetch(this.notifyChannelId) as TextChannel;
-    notifyChannel.send({
-      embeds: [
-        createEmbed({
-          title: "指定された時間になったため、ボイスチャンネルから切断されました。",
-          color: "info",
-          ...DEFAULT_MESSAGE_OPTIONS
-        })
-      ]
-    });
+  private async disconnect(schedule: Schedule, userId?: string) {
+    try {
+      const channel = await this.client.channels.fetch(schedule.voiceChannelId);
+      if (channel && channel.isVoiceBased()) {
+        const members = [...channel.members.values()].filter(member =>
+          !member.user.bot && (userId ? member.id === userId : !this.userSchedules.has(member.id))
+        );
+        await Promise.all(members.map(member =>
+          member.voice.disconnect("指定された時間になったため、ボイスチャンネルから切断されました")
+        ));
+      }
 
-    const channel = await client.channels.fetch(this.voiceChannelId);
-    if (channel && channel.isVoiceBased()) {
-      channel.members.forEach(member => {
-        if (!member.user.bot) {
-          member.voice.disconnect("指定された時間になったため、ボイスチャンネルから切断されました");
-        }
+      const notifyChannel = await this.client.channels.fetch(schedule.notifyChannelId) as TextChannel;
+      await notifyChannel.send({
+        embeds: [createEmbed({
+          title: userId ? "個別のVC切断時間になりました" : "全員用のVC切断時間になりました",
+          description: userId ? `<@${userId}> の切断時間: ${schedule.disconnectTime}` : "個別設定のあるユーザーは切断対象から除外しました。",
+          color: "info"
+        })],
+        ...DEFAULT_MESSAGE_OPTIONS
       });
-    }
+    } finally {
+      schedule.timer = null;
+      if (userId) {
+        // 個別タイマーが先に終了しても、全員用タイマーが終わるまでは優先設定を保持する。
+        if (!this.globalSchedule && this.userSchedules.get(userId) === schedule) {
+          this.userSchedules.delete(userId);
+        }
+      } else if (this.globalSchedule === schedule) {
+        this.globalSchedule = null;
+        for (const [id, individual] of this.userSchedules) {
+          if (!individual.timer) this.userSchedules.delete(id);
+        }
+      }
 
-    // 切断後stateを削除
-    if (this.timer) {
-      GuildStates.delete(this.guildId);
+      if (!this.globalSchedule && this.userSchedules.size === 0 && GuildStates.get(this.guildId) === this) {
+        GuildStates.delete(this.guildId);
+      }
     }
   }
 }
